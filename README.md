@@ -46,7 +46,7 @@ Contributions to OhMyRunPod are welcome! Please feel free to submit pull request
 
 ## License
 
-This project is licensed under the [MIT License](LICENSE).
+This project is licensed under the [GPL-3.0 license](LICENSE).
 
 ## Acknowledgements
 
