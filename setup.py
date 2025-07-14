@@ -6,9 +6,10 @@ with open(os.path.join(os.path.dirname(__file__), 'README.md'), encoding='utf-8'
 
 setup(
     name='OhMyRunPod',
-    version='0.6.1',
+    version='0.6.2',
     author='Madiator2011',
     author_email='admin@madiator.com',
+    url='https://github.com/kodxana/OhMyRunPod-python',
     packages=find_packages(),
     include_package_data=True,
     long_description=long_description,
@@ -16,6 +17,10 @@ setup(
     install_requires=[
         'rich>=13.0.0',
     ],
+    project_urls={
+        'Source': 'https://github.com/kodxana/OhMyRunPod-python',
+        'Bug Reports': 'https://github.com/kodxana/OhMyRunPod-python/issues',
+    },
     entry_points={
         'console_scripts': [
             'OhMyRunPod=OhMyRunPod.main:main',
