@@ -7,7 +7,6 @@ OhMyRunPod is a comprehensive command-line tool designed to facilitate various o
 - **Interactive GUI**: Beautiful terminal interface with arrow key navigation
 - **SSH Setup**: Easily configure SSH for your pod environment with secure password generation
 - **Pod Information**: Display detailed information about the pod (RAM, Public IP, GPU count, vCPU count, CUDA versions)
-- **Tailscale VPN**: Install and configure Tailscale for secure networking
 - **File Transfer**: Multiple file transfer options including croc and SFTP
 - **ComfyUI Management**: Complete ComfyUI management system with:
   - Automatic template detection (Aitrepreneur, Standard, Madiator2011's templates)
@@ -48,11 +47,6 @@ OhMyRunPod --setup-ssh
 #### Display Pod Information
 ```bash
 OhMyRunPod --info
-```
-
-#### Setup Tailscale
-```bash
-OhMyRunPod --setup-tailscale
 ```
 
 #### File Transfer Setup
