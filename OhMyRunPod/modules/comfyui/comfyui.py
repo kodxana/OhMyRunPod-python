@@ -1,8 +1,6 @@
 import subprocess
 import os
 import sys
-import termios
-import tty
 import json
 from pathlib import Path
 from rich.console import Console
@@ -12,6 +10,7 @@ from rich.table import Table
 from rich.prompt import Prompt, Confirm
 from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.align import Align
+from OhMyRunPod.utils.menu import BaseMenu
 
 console = Console()
 
@@ -281,137 +280,33 @@ def list_configurations():
 class ConfigurationSelector:
     def __init__(self, configurations):
         self.console = Console()
-        self.current_option = 0
         self.configurations = configurations
-        
-    def display_menu(self):
-        self.console.clear()
-        
-        # Title
-        console.print("\n[bold blue]Select ComfyUI Configuration[/bold blue]")
-        console.print("=" * 50)
-        
-        if not self.configurations:
-            console.print("[yellow]No ComfyUI configurations available.[/yellow]")
-            console.print("Use 'Add Custom Configuration' to add one.")
-            return
-        
-        # Create menu table
-        table = Table(show_header=False, box=None, padding=(0, 2))
-        table.add_column("", style="cyan", no_wrap=True)
-        table.add_column("", style="black")
-        table.add_column("", style="black")
-        
-        for i, config in enumerate(self.configurations):
-            issues = validate_comfyui_installation(config["comfyui_path"], config["venv_path"])
-            status = "✓" if not issues else "⚠"
-            status_color = "green" if not issues else "yellow"
-            
-            if i == self.current_option:
-                marker = "►"
-                option_style = "bold green"
-            else:
-                marker = " "
-                option_style = "white"
-            
-            table.add_row(
-                f"{marker} {config['name']} [{status_color}]{status}[/{status_color}]",
-                f"ComfyUI: {config['comfyui_path']}",
-                f"Venv: {config['venv_path']}",
-                style=option_style if i == self.current_option else None
-            )
-        
-        # Create main panel
-        panel_content = Align.center(table)
-        panel = Panel(
-            panel_content,
-            border_style="blue",
-            padding=(1, 2)
-        )
-        
-        self.console.print(panel)
-        
-        # Instructions
-        instructions = Text("Use ↑/↓ arrows to navigate, Enter to select, ESC to cancel, or type option number:", style="dim")
-        self.console.print(Align.center(instructions))
-    
-    def navigate_up(self):
-        if self.current_option > 0:
-            self.current_option -= 1
-    
-    def navigate_down(self):
-        if self.current_option < len(self.configurations) - 1:
-            self.current_option += 1
-    
-    def get_char(self):
-        """Get a single character from stdin"""
-        try:
-            fd = sys.stdin.fileno()
-            old_settings = termios.tcgetattr(fd)
-            tty.setraw(sys.stdin.fileno())
-            char = sys.stdin.read(1)
-            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
-            return char
-        except:
-            return input()
-    
+
     def run(self):
-        """Run the configuration selector and return the selected configuration"""
+        """Select a configuration using the shared BaseMenu."""
         if not self.configurations:
-            self.display_menu()
-            console.print("\n[dim]Press any key to continue...[/dim]")
+            self.console.print("[yellow]No ComfyUI configurations available.[/yellow]")
+            self.console.print("Use 'Add Custom Configuration' to add one.")
+            self.console.print("\n[dim]Press Enter to continue...[/dim]")
             input()
             return None
-            
-        self.display_menu()
-        
-        while True:
-            try:
-                char = self.get_char()
-                
-                if char == '\x1b':  # ESC sequence
-                    try:
-                        char2 = self.get_char()
-                        char3 = self.get_char()
-                        if char2 == '[':
-                            if char3 == 'A':  # Up arrow
-                                self.navigate_up()
-                                self.display_menu()
-                            elif char3 == 'B':  # Down arrow
-                                self.navigate_down()
-                                self.display_menu()
-                    except:
-                        return None  # ESC pressed
-                
-                elif char == '\r' or char == '\n':  # Enter key
-                    return self.configurations[self.current_option]
-                
-                elif char == 'q' or char == 'Q':  # Q to quit
-                    return None
-                
-                elif char.isdigit():  # Number selection
-                    option_num = int(char)
-                    if 1 <= option_num <= len(self.configurations):
-                        return self.configurations[option_num - 1]
-                    
-            except KeyboardInterrupt:
-                return None
-            except:
-                # Fallback to number-based selection
-                self.console.print("\n[yellow]Arrow keys not supported in this environment.[/yellow]")
-                self.console.print("Available configurations:")
-                for i, config in enumerate(self.configurations, 1):
-                    issues = validate_comfyui_installation(config["comfyui_path"], config["venv_path"])
-                    status = "✓" if not issues else "⚠"
-                    status_color = "green" if not issues else "yellow"
-                    
-                    self.console.print(f"  [{status_color}]{i}. {config['name']} {status}[/{status_color}]")
-                
-                try:
-                    choice = Prompt.ask("Select configuration", choices=[str(i) for i in range(1, len(self.configurations) + 1)])
-                    return self.configurations[int(choice) - 1]
-                except:
-                    return None
+
+        options = []
+        for cfg in self.configurations:
+            issues = validate_comfyui_installation(cfg["comfyui_path"], cfg["venv_path"])
+            status = "✓ Valid" if not issues else "⚠ Issues"
+            options.append((f"{cfg['name']} ({status})", f"ComfyUI: {cfg['comfyui_path']} | Venv: {cfg['venv_path']}"))
+        options.append(("Back", "Cancel selection"))
+
+        menu = BaseMenu(
+            title="Select ComfyUI Configuration",
+            options=options,
+            breadcrumbs=["ComfyUI", "Configuration"],
+        )
+        idx = menu.run()
+        if idx == len(options) - 1:
+            return None
+        return self.configurations[idx]
 
 def select_configuration():
     """Select a ComfyUI configuration with arrow key navigation"""
@@ -590,149 +485,41 @@ def manage_custom_nodes():
     if not setup_comfy_cli(config):
         return False
     
-    # Custom node management menu
-    class CustomNodeMenu:
-        def __init__(self):
-            self.console = Console()
-            self.current_option = 0
-            self.options = [
-                ("Show all custom nodes", "comfy node show all"),
-                ("Show installed nodes", "comfy node simple-show installed"),
-                ("Show available nodes", "comfy node show not-installed"),
-                ("Update all nodes", "comfy node update all"),
-                ("Install custom node", "comfy node install"),
-                ("Save snapshot", "comfy node save-snapshot"),
-                ("Restore snapshot", "comfy node restore-snapshot"),
-                ("Back", None)
-            ]
-            
-        def display_menu(self):
-            self.console.clear()
-            
-            console.print("\n[bold blue]Custom Node Management[/bold blue]")
-            console.print("=" * 50)
-            
-            # Show active configuration
-            current_config = get_current_configuration()
-            if current_config:
-                console.print(f"[bold green]Active Template:[/bold green] {current_config['name']}")
-                console.print(f"[dim]ComfyUI: {current_config['comfyui_path']}[/dim]")
-                console.print(f"[dim]Venv: {current_config['venv_path']}[/dim]")
-            else:
-                console.print("[bold yellow]No active configuration[/bold yellow]")
-            console.print()
-            
-            # Create menu table
-            table = Table(show_header=False, box=None, padding=(0, 2))
-            table.add_column("", style="cyan", no_wrap=True)
-            table.add_column("", style="black")
-            
-            for i, (option, _) in enumerate(self.options):
-                if i == self.current_option:
-                    marker = "►"
-                    option_style = "bold green"
-                else:
-                    marker = " "
-                    option_style = "white"
-                
-                table.add_row(
-                    f"{marker} {option}",
-                    "",
-                    style=option_style if i == self.current_option else None
-                )
-            
-            # Create main panel
-            panel_content = Align.center(table)
-            panel = Panel(
-                panel_content,
-                border_style="blue",
-                padding=(1, 2)
-            )
-            
-            self.console.print(panel)
-            
-            # Instructions
-            instructions = Text("Use ↑/↓ arrows to navigate, Enter to select, ESC to go back, or type option number:", style="dim")
-            self.console.print(Align.center(instructions))
-        
-        def navigate_up(self):
-            if self.current_option > 0:
-                self.current_option -= 1
-        
-        def navigate_down(self):
-            if self.current_option < len(self.options) - 1:
-                self.current_option += 1
-        
-        def get_char(self):
-            """Get a single character from stdin"""
-            try:
-                fd = sys.stdin.fileno()
-                old_settings = termios.tcgetattr(fd)
-                tty.setraw(sys.stdin.fileno())
-                char = sys.stdin.read(1)
-                termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
-                return char
-            except:
-                return input()
-        
-        def run(self):
-            """Run the custom node menu and return the selected option"""
-            self.display_menu()
-            
-            while True:
-                try:
-                    char = self.get_char()
-                    
-                    if char == '\x1b':  # ESC sequence
-                        try:
-                            char2 = self.get_char()
-                            char3 = self.get_char()
-                            if char2 == '[':
-                                if char3 == 'A':  # Up arrow
-                                    self.navigate_up()
-                                    self.display_menu()
-                                elif char3 == 'B':  # Down arrow
-                                    self.navigate_down()
-                                    self.display_menu()
-                        except:
-                            return len(self.options) - 1  # Back
-                    
-                    elif char == '\r' or char == '\n':  # Enter key
-                        return self.current_option
-                    
-                    elif char == 'q' or char == 'Q':  # Q to quit
-                        return len(self.options) - 1
-                    
-                    elif char.isdigit():  # Number selection
-                        option_num = int(char)
-                        if 1 <= option_num <= len(self.options):
-                            return option_num - 1
-                        
-                except KeyboardInterrupt:
-                    return len(self.options) - 1
-                except:
-                    # Fallback to number-based selection
-                    self.console.print("\n[yellow]Arrow keys not supported in this environment.[/yellow]")
-                    self.console.print("Available options:")
-                    for i, (option, _) in enumerate(self.options, 1):
-                        self.console.print(f"  [cyan]{i}[/cyan]. {option}")
-                    
-                    try:
-                        choice = Prompt.ask("Select option", choices=[str(i) for i in range(1, len(self.options) + 1)])
-                        return int(choice) - 1
-                    except:
-                        return len(self.options) - 1
+    options = [
+        ("Show all custom nodes", "comfy node show all"),
+        ("Show installed nodes", "comfy node simple-show installed"),
+        ("Show available nodes", "comfy node show not-installed"),
+        ("Update all nodes", "comfy node update all"),
+        ("Install custom node", "comfy node install"),
+        ("Save snapshot", "comfy node save-snapshot"),
+        ("Restore snapshot", "comfy node restore-snapshot"),
+        ("Back", None),
+    ]
 
-    node_menu = CustomNodeMenu()
+    subtitle = f"Active: {config['name']}"
+    node_menu = BaseMenu(
+        title="Custom Node Management",
+        subtitle=subtitle,
+        options=options,
+        breadcrumbs=["ComfyUI", "Custom Nodes"],
+        help_lines=[
+            "Show all: List every known custom node repository.",
+            "Installed: Show nodes currently installed in your setup.",
+            "Available: Nodes that are known but not installed.",
+            "Update all: Pull latest changes for all custom nodes.",
+            "Install: Install a node by name (e.g., ComfyUI-Impact-Pack).",
+            "Snapshots: Save or restore the custom_nodes folder state.",
+        ],
+    )
     
     while True:
         try:
             choice_idx = node_menu.run()
             
-            if choice_idx == len(node_menu.options) - 1:  # Back
+            if choice_idx == len(options) - 1:  # Back
                 break
             
-            desc, base_cmd = node_menu.options[choice_idx]
+            desc, base_cmd = options[choice_idx]
             
             if choice_idx == 0:  # Show all custom nodes
                 print_status("Fetching all custom nodes...", "info")
@@ -803,143 +590,28 @@ def manage_models():
     if not setup_comfy_cli(config):
         return False
     
-    # Model management menu
-    class ModelMenu:
-        def __init__(self):
-            self.console = Console()
-            self.current_option = 0
-            self.options = [
-                ("Download model", "comfy model download"),
-                ("Back", None)
-            ]
-            
-        def display_menu(self):
-            self.console.clear()
-            
-            console.print("\n[bold blue]Model Management[/bold blue]")
-            console.print("=" * 50)
-            
-            # Show active configuration
-            current_config = get_current_configuration()
-            if current_config:
-                console.print(f"[bold green]Active Template:[/bold green] {current_config['name']}")
-                console.print(f"[dim]ComfyUI: {current_config['comfyui_path']}[/dim]")
-                console.print(f"[dim]Venv: {current_config['venv_path']}[/dim]")
-            else:
-                console.print("[bold yellow]No active configuration[/bold yellow]")
-            console.print()
-            
-            # Create menu table
-            table = Table(show_header=False, box=None, padding=(0, 2))
-            table.add_column("", style="cyan", no_wrap=True)
-            table.add_column("", style="black")
-            
-            for i, (option, _) in enumerate(self.options):
-                if i == self.current_option:
-                    marker = "►"
-                    option_style = "bold green"
-                else:
-                    marker = " "
-                    option_style = "white"
-                
-                table.add_row(
-                    f"{marker} {option}",
-                    "",
-                    style=option_style if i == self.current_option else None
-                )
-            
-            # Create main panel
-            panel_content = Align.center(table)
-            panel = Panel(
-                panel_content,
-                border_style="blue",
-                padding=(1, 2)
-            )
-            
-            self.console.print(panel)
-            
-            # Instructions
-            instructions = Text("Use ↑/↓ arrows to navigate, Enter to select, ESC to go back, or type option number:", style="dim")
-            self.console.print(Align.center(instructions))
-        
-        def navigate_up(self):
-            if self.current_option > 0:
-                self.current_option -= 1
-        
-        def navigate_down(self):
-            if self.current_option < len(self.options) - 1:
-                self.current_option += 1
-        
-        def get_char(self):
-            """Get a single character from stdin"""
-            try:
-                fd = sys.stdin.fileno()
-                old_settings = termios.tcgetattr(fd)
-                tty.setraw(sys.stdin.fileno())
-                char = sys.stdin.read(1)
-                termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
-                return char
-            except:
-                return input()
-        
-        def run(self):
-            """Run the model menu and return the selected option"""
-            self.display_menu()
-            
-            while True:
-                try:
-                    char = self.get_char()
-                    
-                    if char == '\x1b':  # ESC sequence
-                        try:
-                            char2 = self.get_char()
-                            char3 = self.get_char()
-                            if char2 == '[':
-                                if char3 == 'A':  # Up arrow
-                                    self.navigate_up()
-                                    self.display_menu()
-                                elif char3 == 'B':  # Down arrow
-                                    self.navigate_down()
-                                    self.display_menu()
-                        except:
-                            return len(self.options) - 1  # Back
-                    
-                    elif char == '\r' or char == '\n':  # Enter key
-                        return self.current_option
-                    
-                    elif char == 'q' or char == 'Q':  # Q to quit
-                        return len(self.options) - 1
-                    
-                    elif char.isdigit():  # Number selection
-                        option_num = int(char)
-                        if 1 <= option_num <= len(self.options):
-                            return option_num - 1
-                        
-                except KeyboardInterrupt:
-                    return len(self.options) - 1
-                except:
-                    # Fallback to number-based selection
-                    self.console.print("\n[yellow]Arrow keys not supported in this environment.[/yellow]")
-                    self.console.print("Available options:")
-                    for i, (option, _) in enumerate(self.options, 1):
-                        self.console.print(f"  [cyan]{i}[/cyan]. {option}")
-                    
-                    try:
-                        choice = Prompt.ask("Select option", choices=[str(i) for i in range(1, len(self.options) + 1)])
-                        return int(choice) - 1
-                    except:
-                        return len(self.options) - 1
-
-    model_menu = ModelMenu()
+    options = [("Download model", "comfy model download"), ("Back", None)]
+    subtitle = f"Active: {config['name']}"
+    model_menu = BaseMenu(
+        title="Model Management",
+        subtitle=subtitle,
+        options=options,
+        breadcrumbs=["ComfyUI", "Models"],
+        help_lines=[
+            "Download model: Provide a CivitAI or HuggingFace URL.",
+            "Relative path: Optional subfolder under models/ to place the file.",
+            "Tokens: Set API tokens when prompted for protected downloads.",
+        ],
+    )
     
     while True:
         try:
             choice_idx = model_menu.run()
             
-            if choice_idx == len(model_menu.options) - 1:  # Back
+            if choice_idx == len(options) - 1:  # Back
                 break
             
-            desc, base_cmd = model_menu.options[choice_idx]
+            desc, base_cmd = options[choice_idx]
             
             if choice_idx == 0:  # Download model
                 url = Prompt.ask("Enter model URL (CivitAI, HuggingFace, etc.)")
@@ -992,145 +664,33 @@ def manage_comfyui_manager():
     if not setup_comfy_cli(config):
         return False
     
-    # Manager options
-    class ManagerMenu:
-        def __init__(self):
-            self.console = Console()
-            self.current_option = 0
-            self.options = [
-                ("Enable GUI", "comfy manager enable-gui"),
-                ("Disable GUI", "comfy manager disable-gui"),
-                ("Clear reserved startup action", "comfy manager clear"),
-                ("Back", None)
-            ]
-            
-        def display_menu(self):
-            self.console.clear()
-            
-            console.print("\n[bold blue]ComfyUI-Manager Management[/bold blue]")
-            console.print("=" * 50)
-            
-            # Show active configuration
-            current_config = get_current_configuration()
-            if current_config:
-                console.print(f"[bold green]Active Template:[/bold green] {current_config['name']}")
-                console.print(f"[dim]ComfyUI: {current_config['comfyui_path']}[/dim]")
-                console.print(f"[dim]Venv: {current_config['venv_path']}[/dim]")
-            else:
-                console.print("[bold yellow]No active configuration[/bold yellow]")
-            console.print()
-            
-            # Create menu table
-            table = Table(show_header=False, box=None, padding=(0, 2))
-            table.add_column("", style="cyan", no_wrap=True)
-            table.add_column("", style="black")
-            
-            for i, (option, _) in enumerate(self.options):
-                if i == self.current_option:
-                    marker = "►"
-                    option_style = "bold green"
-                else:
-                    marker = " "
-                    option_style = "white"
-                
-                table.add_row(
-                    f"{marker} {option}",
-                    "",
-                    style=option_style if i == self.current_option else None
-                )
-            
-            # Create main panel
-            panel_content = Align.center(table)
-            panel = Panel(
-                panel_content,
-                border_style="blue",
-                padding=(1, 2)
-            )
-            
-            self.console.print(panel)
-            
-            # Instructions
-            instructions = Text("Use ↑/↓ arrows to navigate, Enter to select, ESC to go back, or type option number:", style="dim")
-            self.console.print(Align.center(instructions))
-        
-        def navigate_up(self):
-            if self.current_option > 0:
-                self.current_option -= 1
-        
-        def navigate_down(self):
-            if self.current_option < len(self.options) - 1:
-                self.current_option += 1
-        
-        def get_char(self):
-            """Get a single character from stdin"""
-            try:
-                fd = sys.stdin.fileno()
-                old_settings = termios.tcgetattr(fd)
-                tty.setraw(sys.stdin.fileno())
-                char = sys.stdin.read(1)
-                termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
-                return char
-            except:
-                return input()
-        
-        def run(self):
-            """Run the manager menu and return the selected option"""
-            self.display_menu()
-            
-            while True:
-                try:
-                    char = self.get_char()
-                    
-                    if char == '\x1b':  # ESC sequence
-                        try:
-                            char2 = self.get_char()
-                            char3 = self.get_char()
-                            if char2 == '[':
-                                if char3 == 'A':  # Up arrow
-                                    self.navigate_up()
-                                    self.display_menu()
-                                elif char3 == 'B':  # Down arrow
-                                    self.navigate_down()
-                                    self.display_menu()
-                        except:
-                            return len(self.options) - 1  # Back
-                    
-                    elif char == '\r' or char == '\n':  # Enter key
-                        return self.current_option
-                    
-                    elif char == 'q' or char == 'Q':  # Q to quit
-                        return len(self.options) - 1
-                    
-                    elif char.isdigit():  # Number selection
-                        option_num = int(char)
-                        if 1 <= option_num <= len(self.options):
-                            return option_num - 1
-                        
-                except KeyboardInterrupt:
-                    return len(self.options) - 1
-                except:
-                    # Fallback to number-based selection
-                    self.console.print("\n[yellow]Arrow keys not supported in this environment.[/yellow]")
-                    self.console.print("Available options:")
-                    for i, (option, _) in enumerate(self.options, 1):
-                        self.console.print(f"  [cyan]{i}[/cyan]. {option}")
-                    
-                    try:
-                        choice = Prompt.ask("Select option", choices=[str(i) for i in range(1, len(self.options) + 1)])
-                        return int(choice) - 1
-                    except:
-                        return len(self.options) - 1
-
-    manager_menu = ManagerMenu()
+    options = [
+        ("Enable GUI", "comfy manager enable-gui"),
+        ("Disable GUI", "comfy manager disable-gui"),
+        ("Clear reserved startup action", "comfy manager clear"),
+        ("Back", None),
+    ]
+    subtitle = f"Active: {config['name']}"
+    manager_menu = BaseMenu(
+        title="ComfyUI-Manager Management",
+        subtitle=subtitle,
+        options=options,
+        breadcrumbs=["ComfyUI", "Manager"],
+        help_lines=[
+            "Enable GUI: Start ComfyUI-Manager web UI when ComfyUI launches.",
+            "Disable GUI: Turn off Manager UI integration.",
+            "Clear: Remove any reserved startup action for Manager.",
+        ],
+    )
     
     while True:
         try:
             choice_idx = manager_menu.run()
             
-            if choice_idx == len(manager_menu.options) - 1:  # Back
+            if choice_idx == len(options) - 1:  # Back
                 break
             
-            desc, base_cmd = manager_menu.options[choice_idx]
+            desc, base_cmd = options[choice_idx]
             
             if choice_idx == 0:  # Enable GUI
                 print_status("Enabling ComfyUI-Manager GUI...", "info")
@@ -1203,277 +763,64 @@ def show_status():
 class ComfyUIMenu:
     def __init__(self):
         self.console = Console()
-        self.current_option = 0
         self.options = [
             ("Configure ComfyUI", "Detect or configure ComfyUI installation"),
             ("Manage Custom Nodes", "Install and manage custom nodes"),
             ("Manage Models", "Download and manage models"),
             ("Manage ComfyUI-Manager", "Enable/disable ComfyUI-Manager GUI"),
             ("Show Status", "Check ComfyUI status and info"),
-            ("Back", "Return to main menu")
+            ("Back", "Return to main menu"),
         ]
-        
-    def display_menu(self):
-        self.console.clear()
-        
-        # Title
-        title = Text("ComfyUI Management", style="bold blue")
-        console.print(f"\n[bold blue]{title}[/bold blue]")
-        console.print("=" * 50)
-        
-        # Show active configuration
+
+    def run(self) -> int:
         current_config = get_current_configuration()
-        if current_config:
-            console.print(f"[bold green]Active Template:[/bold green] {current_config['name']}")
-            console.print(f"[dim]ComfyUI: {current_config['comfyui_path']}[/dim]")
-            console.print(f"[dim]Venv: {current_config['venv_path']}[/dim]")
-        else:
-            console.print("[bold yellow]No active configuration - Please configure ComfyUI first[/bold yellow]")
-        
-        console.print()
-        
-        # Create menu table
-        table = Table(show_header=False, box=None, padding=(0, 2))
-        table.add_column("", style="cyan", no_wrap=True)
-        table.add_column("", style="black")
-        
-        for i, (option, description) in enumerate(self.options):
-            if i == self.current_option:
-                marker = "►"
-                option_style = "bold green"
-                desc_style = "green"
-            else:
-                marker = " "
-                option_style = "white"
-                desc_style = "dim"
-            
-            table.add_row(
-                f"{marker} {option}",
-                description,
-                style=option_style if i == self.current_option else None
-            )
-        
-        # Create main panel
-        panel_content = Align.center(table)
-        panel = Panel(
-            panel_content,
-            border_style="blue",
-            padding=(1, 2)
+        subtitle = (
+            f"Active: {current_config['name']}" if current_config else "No active configuration"
         )
-        
-        self.console.print(panel)
-        
-        # Instructions
-        instructions = Text("Use ↑/↓ arrows to navigate, Enter to select, ESC to go back, or type option number:", style="dim")
-        self.console.print(Align.center(instructions))
-        
-        # Credits
-        credits = Text("Powered by Comfy-Cli: https://github.com/Comfy-Org/comfy-cli", style="dim italic")
-        self.console.print(Align.center(credits))
-    
-    def navigate_up(self):
-        if self.current_option > 0:
-            self.current_option -= 1
-    
-    def navigate_down(self):
-        if self.current_option < len(self.options) - 1:
-            self.current_option += 1
-    
-    def get_char(self):
-        """Get a single character from stdin"""
-        try:
-            fd = sys.stdin.fileno()
-            old_settings = termios.tcgetattr(fd)
-            tty.setraw(sys.stdin.fileno())
-            char = sys.stdin.read(1)
-            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
-            return char
-        except:
-            # Fallback to input() if termios is not available
-            return input()
-    
-    def run(self):
-        """Run the ComfyUI menu and return the selected option"""
-        self.display_menu()
-        
-        while True:
-            try:
-                char = self.get_char()
-                
-                if char == '\x1b':  # ESC sequence
-                    # Try to read the next two characters for arrow keys
-                    try:
-                        char2 = self.get_char()
-                        char3 = self.get_char()
-                        if char2 == '[':
-                            if char3 == 'A':  # Up arrow
-                                self.navigate_up()
-                                self.display_menu()
-                            elif char3 == 'B':  # Down arrow
-                                self.navigate_down()
-                                self.display_menu()
-                    except:
-                        # Just ESC key pressed - go back
-                        return len(self.options) - 1
-                
-                elif char == '\r' or char == '\n':  # Enter key
-                    return self.current_option
-                
-                elif char == 'q' or char == 'Q':  # Q to quit
-                    return len(self.options) - 1
-                
-                elif char.isdigit():  # Number selection
-                    option_num = int(char)
-                    if 1 <= option_num <= len(self.options):
-                        return option_num - 1
-                    
-            except KeyboardInterrupt:
-                return len(self.options) - 1
-            except:
-                # Fallback to number-based selection
-                self.console.print("\n[yellow]Arrow keys not supported in this environment.[/yellow]")
-                self.console.print("Please select an option by number:")
-                for i, (option, _) in enumerate(self.options):
-                    self.console.print(f"  [cyan]{i+1}[/cyan]. {option}")
-                
-                try:
-                    choice = Prompt.ask("Enter your choice", choices=[str(i+1) for i in range(len(self.options))])
-                    return int(choice) - 1
-                except:
-                    return len(self.options) - 1
+        menu = BaseMenu(
+            title="ComfyUI Management",
+            subtitle=subtitle,
+            options=self.options,
+            breadcrumbs=["ComfyUI"],
+            help_lines=[
+                "Configure ComfyUI: Detect or add your ComfyUI installation paths.",
+                "Manage Custom Nodes: Install/update nodes, save/restore snapshots.",
+                "Manage Models: Download models from CivitAI/HuggingFace.",
+                "ComfyUI-Manager: Enable/disable the GUI manager extension.",
+                "Status: Validate installation and view process status.",
+            ],
+        )
+        return menu.run()
 
 class ConfigurationMenu:
     def __init__(self):
         self.console = Console()
-        self.current_option = 0
         self.options = [
             ("Auto-detect Templates", "Automatically detect ComfyUI installations"),
             ("List Configurations", "Show all available configurations"),
             ("Select Configuration", "Choose a configuration to use"),
             ("Add Custom Configuration", "Manually add a configuration"),
-            ("Back", "Return to ComfyUI menu")
+            ("Back", "Return to ComfyUI menu"),
         ]
-        
-    def display_menu(self):
-        self.console.clear()
-        
-        # Title
-        title = Text("ComfyUI Configuration", style="bold blue")
-        console.print(f"\n[bold blue]{title}[/bold blue]")
-        console.print("=" * 50)
-        
-        # Show active configuration
+
+    def run(self) -> int:
         current_config = get_current_configuration()
-        if current_config:
-            console.print(f"[bold green]Active Template:[/bold green] {current_config['name']}")
-            console.print(f"[dim]ComfyUI: {current_config['comfyui_path']}[/dim]")
-            console.print(f"[dim]Venv: {current_config['venv_path']}[/dim]")
-        else:
-            console.print("[bold yellow]No active configuration[/bold yellow]")
-        console.print()
-        
-        # Create menu table
-        table = Table(show_header=False, box=None, padding=(0, 2))
-        table.add_column("", style="cyan", no_wrap=True)
-        table.add_column("", style="black")
-        
-        for i, (option, description) in enumerate(self.options):
-            if i == self.current_option:
-                marker = "►"
-                option_style = "bold green"
-                desc_style = "green"
-            else:
-                marker = " "
-                option_style = "white"
-                desc_style = "dim"
-            
-            table.add_row(
-                f"{marker} {option}",
-                description,
-                style=option_style if i == self.current_option else None
-            )
-        
-        # Create main panel
-        panel_content = Align.center(table)
-        panel = Panel(
-            panel_content,
-            border_style="blue",
-            padding=(1, 2)
+        subtitle = (
+            f"Active: {current_config['name']}" if current_config else "No active configuration"
         )
-        
-        self.console.print(panel)
-        
-        # Instructions
-        instructions = Text("Use ↑/↓ arrows to navigate, Enter to select, ESC to go back, or type option number:", style="dim")
-        self.console.print(Align.center(instructions))
-    
-    def navigate_up(self):
-        if self.current_option > 0:
-            self.current_option -= 1
-    
-    def navigate_down(self):
-        if self.current_option < len(self.options) - 1:
-            self.current_option += 1
-    
-    def get_char(self):
-        """Get a single character from stdin"""
-        try:
-            fd = sys.stdin.fileno()
-            old_settings = termios.tcgetattr(fd)
-            tty.setraw(sys.stdin.fileno())
-            char = sys.stdin.read(1)
-            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
-            return char
-        except:
-            return input()
-    
-    def run(self):
-        """Run the configuration menu and return the selected option"""
-        self.display_menu()
-        
-        while True:
-            try:
-                char = self.get_char()
-                
-                if char == '\x1b':  # ESC sequence
-                    try:
-                        char2 = self.get_char()
-                        char3 = self.get_char()
-                        if char2 == '[':
-                            if char3 == 'A':  # Up arrow
-                                self.navigate_up()
-                                self.display_menu()
-                            elif char3 == 'B':  # Down arrow
-                                self.navigate_down()
-                                self.display_menu()
-                    except:
-                        return len(self.options) - 1
-                
-                elif char == '\r' or char == '\n':  # Enter key
-                    return self.current_option
-                
-                elif char == 'q' or char == 'Q':  # Q to quit
-                    return len(self.options) - 1
-                
-                elif char.isdigit():  # Number selection
-                    option_num = int(char)
-                    if 1 <= option_num <= len(self.options):
-                        return option_num - 1
-                    
-            except KeyboardInterrupt:
-                return len(self.options) - 1
-            except:
-                # Fallback to number-based selection
-                self.console.print("\n[yellow]Arrow keys not supported in this environment.[/yellow]")
-                self.console.print("Please select an option by number:")
-                for i, (option, _) in enumerate(self.options):
-                    self.console.print(f"  [cyan]{i+1}[/cyan]. {option}")
-                
-                try:
-                    choice = Prompt.ask("Enter your choice", choices=[str(i+1) for i in range(len(self.options))])
-                    return int(choice) - 1
-                except:
-                    return len(self.options) - 1
+        menu = BaseMenu(
+            title="ComfyUI Configuration",
+            subtitle=subtitle,
+            options=self.options,
+            breadcrumbs=["ComfyUI", "Configuration"],
+            help_lines=[
+                "Auto-detect: Search common paths for ComfyUI installations.",
+                "List: View all detected and saved configurations.",
+                "Select: Choose which configuration to use by default.",
+                "Add Custom: Manually specify ComfyUI and venv paths.",
+            ],
+        )
+        return menu.run()
 
 def show_configuration_menu():
     """Show configuration submenu"""

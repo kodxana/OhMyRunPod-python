@@ -4,6 +4,7 @@ import platform
 import secrets
 import string
 import shutil
+import tempfile
 from pathlib import Path
 from rich.console import Console
 from rich.panel import Panel
@@ -84,6 +85,14 @@ def generate_ssh_host_keys():
                     cmd.extend(['-b', '4096'])
                 subprocess.run(cmd, check=True)
                 keys_generated = True
+                # Tighten permissions if possible
+                try:
+                    os.chmod(key_path, 0o600)
+                    pub = key_path + '.pub'
+                    if Path(pub).exists():
+                        os.chmod(pub, 0o644)
+                except Exception:
+                    pass
             except subprocess.CalledProcessError:
                 print_status(f"Failed to generate {key_type} host key.", "error")
                 return False
@@ -95,26 +104,123 @@ def generate_ssh_host_keys():
     
     return True
 
+def _detect_service_names():
+    """Detect usable service tool and ssh service name (containers: no systemd)."""
+    managers = []
+    if shutil.which("service"):
+        managers.append("service")
+    if shutil.which("rc-service"):
+        managers.append("rc-service")
+    # Fallback: try init.d script paths
+    services = ["sshd", "ssh"]
+    return managers, services
+
+def _restart_ssh_service():
+    managers, services = _detect_service_names()
+    errors = []
+    for mgr in managers:
+        for svc in services:
+            try:
+                if mgr == "service":
+                    subprocess.run([mgr, svc, "restart"], check=True)
+                elif mgr == "rc-service":
+                    subprocess.run([mgr, svc, "restart"], check=True)
+                print_status(f"SSH service restarted via {mgr} ({svc}).", "success")
+                return True
+            except subprocess.CalledProcessError as e:
+                errors.append(f"{mgr} {svc}: {e}")
+                continue
+    # Fallback: init.d script
+    for svc in ("sshd", "ssh"):
+        path = f"/etc/init.d/{svc}"
+        if Path(path).exists():
+            try:
+                subprocess.run([path, "restart"], check=True)
+                print_status(f"SSH service restarted via {path}.", "success")
+                return True
+            except subprocess.CalledProcessError as e:
+                errors.append(f"{path}: {e}")
+    print_status("Could not restart SSH service automatically. Try manually.", "warning")
+    if errors:
+        print_status("; ".join(errors), "warning")
+    return False
+
+def _set_directives_idempotent(lines, directives):
+    """Return new sshd_config content lines with directives set before any Match blocks.
+
+    Removes existing occurrences of these directives outside Match blocks,
+    then inserts desired directives before first Match block (or at end).
+    """
+    out = []
+    in_match = False
+    inserted = False
+    cleaned = []
+    keys = {k.lower() for k in directives.keys()}
+    for line in lines:
+        stripped = line.strip()
+        if stripped.lower().startswith("match "):
+            in_match = True
+        if not stripped or stripped.startswith("#"):
+            cleaned.append(line)
+            continue
+        key = stripped.split()[0].lower()
+        if key in keys and not in_match:
+            # skip existing directive outside Match; we'll add ours
+            continue
+        cleaned.append(line)
+
+    # Find insertion point
+    for idx, line in enumerate(cleaned):
+        if line.strip().lower().startswith("match "):
+            new_block = [f"{k} {v}\n" for k, v in directives.items()]
+            out = cleaned[:idx] + new_block + cleaned[idx:]
+            inserted = True
+            break
+    if not inserted:
+        out = cleaned + ["\n"] + [f"{k} {v}\n" for k, v in directives.items()]
+    return out
+
 def configure_ssh():
-    """Configure SSH to allow root login"""
+    """Configure SSH robustly and validate before applying."""
     print_status("Configuring SSH to allow root login with a password...", "info")
-    
+
     config_path = Path('/etc/ssh/sshd_config')
-    
+    backup_path = Path('/etc/ssh/sshd_config.ohmyrunpod.bak')
+    desired = {
+        "PermitRootLogin": "yes",
+        "PasswordAuthentication": "yes",
+    }
+
     try:
-        with open(config_path, 'r') as f:
-            content = f.read()
-        
-        # Update SSH configuration
-        content = content.replace('#PermitRootLogin prohibit-password', 'PermitRootLogin yes')
-        content = content.replace('#PasswordAuthentication no', 'PasswordAuthentication yes')
-        
-        with open(config_path, 'w') as f:
-            f.write(content)
-        
-        # Restart SSH service
-        subprocess.run(['service', 'ssh', 'restart'], check=True)
+        original = config_path.read_text().splitlines(keepends=True)
+        new_lines = _set_directives_idempotent(original, desired)
+
+        # Validate using a temp file
+        with tempfile.NamedTemporaryFile('w', delete=False) as tmp:
+            tmp.writelines(new_lines)
+            tmp_path = tmp.name
+
+        try:
+            subprocess.run(['sshd', '-t', '-f', tmp_path], check=True, capture_output=True)
+        except subprocess.CalledProcessError as e:
+            msg = e.stderr.decode() if getattr(e, 'stderr', None) else str(e)
+            print_status(f"New SSH config invalid: {msg}", "error")
+            os.unlink(tmp_path)
+            return False
+
+        # Backup once and apply
+        if not backup_path.exists():
+            try:
+                shutil.copy2(config_path, backup_path)
+                print_status(f"Backup saved to {backup_path}", "success")
+            except Exception:
+                pass
+
+        Path(tmp_path).replace(config_path)
         print_status("SSH Configuration Updated.", "success")
+
+        # Restart/reload service
+        _restart_ssh_service()
         return True
     except Exception as e:
         print_status(f"Failed to configure SSH: {e}", "error")
